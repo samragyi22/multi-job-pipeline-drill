@@ -9,6 +9,7 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,6 +20,9 @@ jobs:
 
   unit-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Unit tests depend on lint to ensure code syntax and quality standards pass before testing logic
+    needs: lint
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,6 +33,9 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Build depends on lint to prevent wasting runner resources compiling code with lint errors
+    needs: lint
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,32 +43,51 @@ jobs:
           node-version: '20'
       - run: npm ci
       - run: npm run build
-      # Problem 4: no upload-artifact step — dist/ is never saved
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-build
+          path: dist
 
   integration-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Integration tests depend on build to ensure the application bundle in dist/ is compiled and ready
+    needs: build
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
       - run: npm ci
-      # Problem 2: no download-artifact — dist/ does not exist on this machine
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-build
+          path: dist
       - run: npm run test:integration
 
   deploy-staging:
     runs-on: ubuntu-latest
-    # Problem 3: no if condition — runs on every branch
+    timeout-minutes: 15
+    # Deploy to staging depends on both unit-tests and integration-tests passing to verify code safety
+    needs: [unit-tests, integration-tests]
+    if: github.ref == 'refs/heads/main'
     steps:
       - run: echo "Deploying to staging environment"
 
   deploy-production:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Deploy to production depends on deploy-staging succeeding as a release gate
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
     steps:
       - run: echo "Deploying to production environment"
 
   notify:
     runs-on: ubuntu-latest
-    # Problem 6: no if: always() — skipped when upstream fails
+    timeout-minutes: 10
+    # Notify depends on all prior workflow jobs so it can report the final pipeline status
+    needs: [lint, unit-tests, build, integration-tests, deploy-staging, deploy-production]
+    if: always()
     steps:
       - run: echo "Pipeline notification sent"
